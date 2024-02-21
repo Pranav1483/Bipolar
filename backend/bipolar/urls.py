@@ -9,4 +9,6 @@ urlpatterns = [
     path('booking', BookingAPIView.as_view(), name='booking'),
     path('schedule', FlightScheduleAPIView.as_view(), name='flightSchedule'),
     path('flight', FlightAPIView.as_view(), name='flight'),
+    path('admin', AdminAPIView.as_view(), name='admin'),
+    path('admin/logout', logoutAdmin, name='adminLogout'),
 ]

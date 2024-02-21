@@ -36,10 +36,36 @@ def signup(request: Request):
 @api_view(['GET'])
 def logoutUser(request: Request):
     token = request.auth
-    if token:
+    if token and not request.user.is_staff:
         token.delete()
     return HttpResponse(status=HTTP_204_NO_CONTENT)
 
+@api_view(['GET'])
+def logoutAdmin(request: Request):
+    token = request.auth
+    if token and request.user.is_staff:
+        token.delete()
+    return HttpResponse(status=HTTP_204_NO_CONTENT)
+
+class AdminAPIView(APIView):
+
+    authentication_classes = [TokenAuthentication]
+
+    def get(self, request: Request):
+        if request.user.is_authenticated and request.user.is_staff:
+            user = UserSerializer(request.user).data
+            return JsonResponse(user, status=HTTP_200_OK)
+        else:
+            return HttpResponse(status=HTTP_401_UNAUTHORIZED)
+        
+    def post(self, request: Request):
+        creds = request.data
+        user = authenticate(request=request, username=creds['username'], password=creds['password'])
+        if user is not None and user.is_staff:
+            token_data = Token.objects.get_or_create(user=user)
+            return JsonResponse({'token': token_data[0].key}, status=HTTP_200_OK)
+        else:
+            return HttpResponse(status=HTTP_401_UNAUTHORIZED)
 
 class UserAPIView(APIView):
 
@@ -47,7 +73,6 @@ class UserAPIView(APIView):
 
     def get(self, request: Request):
         if request.user.is_authenticated:
-            time.sleep(3)
             user = UserSerializer(request.user).data
             return JsonResponse(user, status=HTTP_200_OK)
         else:
@@ -84,19 +109,28 @@ class BookingAPIView(APIView):
                     return JsonResponse(BookingSerializer(booking_objects.first()).data, status=HTTP_200_OK)
         else:
             flight_number = request.query_params.get('flight_number')
-            if not flight_number:
-                return HttpResponse(status=HTTP_400_BAD_REQUEST)
             startDateTime = zone.localize(datetime.strptime(request.query_params.get('start'), "%Y-%m-%dT%H:%M")) if request.query_params.get('start') else False
             endDateTime = zone.localize(datetime.strptime(request.query_params.get('end'), "%Y-%m-%dT%H:%M"))  if request.query_params.get('end') else False
-            if not startDateTime or endDateTime:
-                if startDateTime:
-                    booking_filters = Booking.objects.filter(flightSchedule__flight__flight_number=flight_number, flightSchedule__departure__gte=startDateTime)
-                elif endDateTime:
-                    booking_filters = Booking.objects.filter(flightSchedule__flight__flight_number=flight_number, flightSchedule__departure__lte=endDateTime)
+            if not flight_number and not startDateTime and not endDateTime:
+                bookings = BookingSerializer(Booking.objects.all(), many=True).data
+                return JsonResponse({'bookings': bookings}, status=HTTP_200_OK)
+            elif flight_number:
+                if not startDateTime or endDateTime:
+                    if startDateTime:
+                        booking_filters = Booking.objects.filter(flightSchedule__flight__flight_number=flight_number, flightSchedule__departure__gte=startDateTime)
+                    elif endDateTime:
+                        booking_filters = Booking.objects.filter(flightSchedule__flight__flight_number=flight_number, flightSchedule__departure__lte=endDateTime)
+                    else:
+                        booking_filters = Booking.objects.filter(flightSchedule__flight__flight_number=flight_number)
                 else:
-                    booking_filters = Booking.objects.filter(flightSchedule__flight__flight_number=flight_number)
+                    booking_filters = Booking.objects.filter(flightSchedule__flight__flight_number=flight_number, flightSchedule__departure__gte=startDateTime, flightSchedule__departure__lte=endDateTime)
             else:
-                booking_filters = Booking.objects.filter(flightSchedule__flight__flight_number=flight_number, flightSchedule__departure__gte=startDateTime, flightSchedule__departure__lte=endDateTime)
+                if startDateTime and endDateTime:
+                    booking_filters = Booking.objects.filter(flightSchedule__departure__gte=startDateTime, flightSchedule__departure__lte=endDateTime)
+                elif startDateTime:
+                    booking_filters = Booking.objects.filter(flightSchedule__departure__gte=startDateTime)
+                else:
+                    booking_filters = Booking.objects.filter(flightSchedule__departure__lte=endDateTime)
             bookings = BookingSerializer(booking_filters, many=True).data
             return JsonResponse({'bookings': bookings}, status=HTTP_200_OK)
         
@@ -143,8 +177,12 @@ class FlightScheduleAPIView(APIView):
                 flightSchedule = FlightScheduleSerializer(flightSchedule_filters.first()).data
                 return JsonResponse(flightSchedule, status=HTTP_200_OK)
         else:
-            startDateTime = max(zone.localize(datetime.strptime(request.query_params.get('start'), "%Y-%m-%dT%H:%M")), datetime.now(zone))
-            endDateTime = max(zone.localize(datetime.strptime(request.query_params.get('end'), "%Y-%m-%dT%H:%M")), datetime.now(zone))
+            if not request.user.is_staff:
+                startDateTime = max(zone.localize(datetime.strptime(request.query_params.get('start'), "%Y-%m-%dT%H:%M")), datetime.now(zone))
+                endDateTime = max(zone.localize(datetime.strptime(request.query_params.get('end'), "%Y-%m-%dT%H:%M")), datetime.now(zone))
+            else:
+                startDateTime = zone.localize(datetime.strptime(request.query_params.get('start'), "%Y-%m-%dT%H:%M"))
+                endDateTime = zone.localize(datetime.strptime(request.query_params.get('end'), "%Y-%m-%dT%H:%M"))
             origin = request.query_params.get('origin')
             destination = request.query_params.get('destination')
             if not origin or not destination:
@@ -168,8 +206,8 @@ class FlightScheduleAPIView(APIView):
             else:
                 flight = flight_filter.first()
                 flightSchedule = FlightSchedule(flight=flight, 
-                                                departure=zone.localize(datetime.strptime(data['departure'], "%Y-%m-%dT%H:%M")),
-                                                arrival = zone.localize(datetime.strptime(data['arrival'], "%Y-%m-%dT%H:%M")),
+                                                departure=zone.localize(datetime.strptime(data['start'], "%Y-%m-%dT%H:%M")),
+                                                arrival = zone.localize(datetime.strptime(data['end'], "%Y-%m-%dT%H:%M")),
                                                 price = data['price']
                                                 )
                 try:
@@ -207,12 +245,32 @@ class FlightAPIView(APIView):
 
     def get(self, request: Request):
         flight_number = request.query_params.get('flight_number')
-        flight_filter = Flight.objects.filter(flight_number=flight_number)
+        origin = request.query_params.get('origin')
+        destination = request.query_params.get('destination')
+        if not flight_number and not origin and not destination:
+            flights = FlightSerializer(Flight.objects.all(), many=True).data
+            return JsonResponse({'data': flights}, status=HTTP_200_OK)
+        elif flight_number and origin and destination:
+            flight_filter = Flight.objects.filter(flight_number=flight_number, origin=origin, destination=destination)
+        else:
+            if flight_number:
+                if origin:
+                    flight_filter = Flight.objects.filter(flight_number=flight_number, origin=origin)
+                elif destination:
+                    flight_filter = Flight.objects.filter(flight_number=flight_number, destination=destination)
+                else:
+                    flight_filter = Flight.objects.filter(flight_number=flight_number)
+            else:
+                if origin and destination:
+                    flight_filter = Flight.objects.filter(origin=origin, destination=destination)
+                elif origin:
+                    flight_filter = Flight.objects.filter(origin=origin)
+                else:
+                    flight_filter = Flight.objects.filter(destination=destination)
         if not flight_filter.exists():
             return HttpResponse(status=HTTP_404_NOT_FOUND)
         else:
-            flight = flight_filter.first()
-            return JsonResponse(FlightSerializer(flight).data, status=HTTP_200_OK)
+            return JsonResponse({'data': FlightSerializer(flight_filter, many=True).data}, status=HTTP_200_OK)
     
     def post(self, request: Request):
         data = request.data
@@ -220,7 +278,9 @@ class FlightAPIView(APIView):
         if len(origin) != 3 or not origin.isalpha() or len(destination) != 3 or not destination.isalpha():
             return HttpResponse("Incorrect Location", status=HTTP_400_BAD_REQUEST)
         else:
-            flight = Flight(flight_number=data['flight_number'], origin=origin, destination=destination)
+            flight, created = Flight.objects.get_or_create(flight_number=data['flight_number'], origin=origin, destination=destination)
+            if not created:
+                return HttpResponse(status=HTTP_409_CONFLICT)
             try:
                 flight.save()
                 return HttpResponse(status=HTTP_204_NO_CONTENT)

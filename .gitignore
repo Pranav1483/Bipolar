@@ -3,3 +3,4 @@ dockerfile
 .dockerignore
 *.yml
 *.yaml
+*.pem
