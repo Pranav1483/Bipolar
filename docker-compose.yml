@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  backend:
+    image: pranav1483/bipolar-backend:latest
+    ports:
+      - "8000:8000"
+  
+  frontend:
+    image: pranav1483/bipolar-frontend:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend

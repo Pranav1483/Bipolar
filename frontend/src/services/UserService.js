@@ -1,7 +1,7 @@
 import axios from "axios";
 
-const HOST_1 = "http://13.201.40.24:80";
-const HOST = "http://localhost:8000";
+const HOSTS = ["http://13.201.40.24:80", "http://localhost:8000"];
+const HOST = HOSTS[1];
 const VERSION = "v1";
 const BACKEND_BASE_URL = `${HOST}/api/${VERSION}`;
 

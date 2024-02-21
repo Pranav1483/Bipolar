@@ -1,6 +1,4 @@
 *.pdf
 dockerfile
 .dockerignore
-*.yml
-*.yaml
 *.pem
